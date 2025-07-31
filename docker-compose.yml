@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  voicevox:
+    image: ${VOICEVOX_IMAGE}
+    platform: linux/arm64/v8
+    ports:
+      - "50021:50021"
+    # KHÔNG override command (image đã tự chạy engine)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:50021/speakers"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  llama:
+    image: ${LLAMA_IMAGE}
+    platform: linux/arm64/v8
+    ports:
+      - "10000:10000"
+    volumes:
+      - ./models:/models:ro
+    # Image server đã ENTRYPOINT = llama-server → chỉ truyền THAM SỐ
+    command:
+      [
+        "-m", "/models/tinyllama.Q4_K_M.gguf",
+        "--host", "0.0.0.0",
+        "--port", "10000",
+        "-t", "${LLAMA_THREADS}",
+        "-c", "${LLAMA_CTX}",
+        "-ngl", "0",
+        "--parallel", "2"
+      ]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:10000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
