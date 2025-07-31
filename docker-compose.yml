@@ -2,11 +2,17 @@ version: "3.9"
 
 services:
   voicevox:
-    image: ${VOICEVOX_IMAGE}
+    image: voicevox/voicevox_engine:cpu-latest
     platform: linux/arm64/v8
     ports:
       - "50021:50021"
-    # KHÔNG override command (image đã tự chạy engine)
+    # Giới hạn tài nguyên ~ Pi5 (8GB)
+    cpus: "1.0"               # ~1 core
+    cpuset: "0-3"             # ghim vào 4 vCPU đầu
+    cpu_shares: 512
+    mem_limit: "2g"
+    memswap_limit: "2.2g"
+    oom_kill_disable: false
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:50021/speakers"]
       interval: 10s
@@ -16,27 +22,64 @@ services:
     restart: unless-stopped
 
   llama:
-    image: ${LLAMA_IMAGE}
-    platform: linux/arm64/v8
+    image: ghcr.io/ggml-org/llama.cpp:server
+    platform: linux/amd64            # <--- CHẠY BẰNG EMULATION
     ports:
       - "10000:10000"
     volumes:
       - ./models:/models:ro
-    # Image server đã ENTRYPOINT = llama-server → chỉ truyền THAM SỐ
+    # ENTRYPOINT của image = llama-server → chỉ truyền tham số
     command:
       [
         "-m", "/models/tinyllama.Q4_K_M.gguf",
         "--host", "0.0.0.0",
         "--port", "10000",
-        "-t", "${LLAMA_THREADS}",
-        "-c", "${LLAMA_CTX}",
+        "-t", "3",                # threads ≤ CPU cấp cho container
+        "-c", "2048",
         "-ngl", "0",
-        "--parallel", "2"
+        "--parallel", "1"
       ]
+    # Giới hạn tài nguyên ~ Pi5 (8GB)
+    cpus: "2.5"               # ~2.5 core
+    cpuset: "0-3"
+    cpu_shares: 768
+    mem_limit: "4g"
+    memswap_limit: "4.5g"
+    oom_kill_disable: false
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:10000/health"]
       interval: 10s
       timeout: 3s
       retries: 30
       start_period: 60s
+    restart: unless-stopped
+
+  asr:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    platform: linux/arm64/v8
+    ports:
+      - "9000:9000"
+    environment:
+      ASR_ENGINE: "faster_whisper"
+      ASR_MODEL: "base"                 # tạm hạ xuống 'base' cho nhẹ (sau ổn nâng lên 'small')
+      LANGUAGE: "ja"
+      VAD: "false"                      # tắt tạm để giảm RAM/CPU
+      COMPUTE_TYPE: "int8"              # CPU: int8
+      NUM_WORKERS: "1"                  # giảm mức song song để tiết kiệm RAM
+      BEAM_SIZE: "1"                    # giảm thêm RAM/CPU khi decode
+    volumes:
+      - ./asr_models:/root/.cache/whisper
+    # Giới hạn tài nguyên ~ Pi5 (8GB)
+    cpus: "1.0"               # ~1 core
+    cpuset: "0-3"
+    cpu_shares: 256
+    mem_limit: "1.5g"
+    memswap_limit: "2.8g"
+    oom_kill_disable: false
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/docs"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 120s                # cho thời gian tải model lần đầu
     restart: unless-stopped

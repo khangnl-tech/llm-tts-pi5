@@ -1,158 +1,215 @@
-# LLM (TinyLlama) + TTS tiếng Nhật (VOICEVOX) trên Mac M1 (ARM64) bằng Docker Compose
+LLM + ASR + TTS (JP) — Docker Stack (macOS/M1)
 
-Triển khai trợ lý ảo chạy local gồm:
+## Mục đích
+Triển khai nhanh một trợ lý thoại chạy hoàn toàn local gồm:
 
-- **LLM**: llama.cpp server (TinyLlama 1.1B, định dạng GGUF).
-- **TTS**: VOICEVOX Engine (CPU, ARM64) cho tiếng Nhật.
+- **LLM** (TinyLlama-1.1B, phục vụ qua llama.cpp server)
+- **ASR** (Whisper webservice – nhận dạng giọng nói)
+- **TTS** (VOICEVOX – tổng hợp tiếng Nhật)
 
-Thiết lập nhằm mô phỏng tương đối Raspberry Pi 5 (ARM64) trên Mac M1.
+### Lưu ý kiến trúc/kiểu máy:
+- Chỉ service llama chạy với platform: linux/amd64 (dùng emulation trên Mac M1).
+- Hai service còn lại (asr và voicevox) chạy platform: linux/arm64/v8.
 
-## 1) Yêu cầu
+## 1) Yêu cầu phần mềm
+- **macOS** (Apple Silicon M1/M2)
+- **Docker Desktop** (Compose v2 đi kèm)
+  - Bật emulation cho x86/amd64: Settings → Features in development → Use Rosetta for x86/amd64 emulation on Apple Silicon (hoặc tương đương trong phiên bản Docker của bạn).
+- **ffmpeg** (để chuẩn hoá tần số mẫu audio khi test ASR)
+  - Cài bằng Homebrew: `brew install ffmpeg`
+- **curl, python3** (tùy chọn, dùng cho ví dụ lệnh test)
 
-- macOS trên Apple Silicon (M1/M2).
-- Docker Desktop (chạy ARM64).
-- Công cụ CLI khuyến nghị: `curl`, `jq`, `bc`, `ffmpeg` (cài bằng Homebrew nếu cần).
-
-## 2) Cấu trúc thư mục
-
-```bash
-llm-tts/
-├─ .env                   # biến môi trường (threads, context, tag image…)
-├─ docker-compose.yml     # định nghĩa services: llama + voicevox
-├─ models/                # đặt file TinyLlama *.gguf (nếu không dùng --hf-*)
-└─ scripts/
-   ├─ bench_llm.sh        # đo latency & tokens/s cho llama.cpp
-   ├─ bench_voicevox.sh   # đo thời gian synth & RTF của VOICEVOX
-   └─ bench_all.sh        # chạy cả 2 benchmark
+## 2) Cấu trúc dự án
+```
+.
+├─ docker-compose.yml
+├─ models/                    # chứa GGUF của TinyLlama
+│  └─ tinyllama.Q4_K_M.gguf  # (đặt tên tuỳ bạn)
+├─ asr_models/                # cache model cho Whisper ASR (để khởi động nhanh)
+└─ scripts/                   # (tuỳ chọn) script test end-to-end
 ```
 
+Chuẩn bị model LLM: tải file GGUF của TinyLlama (khuyến nghị biến thể Q4_K_M), đặt vào `./models/` và trùng tên với tham số `-m` trong `docker-compose.yml`.
 
-## 3) Biến môi trường (.env)
+## 3) Dịch vụ và cổng
+| Service | Vai trò | Ảnh Docker (gợi ý) | Platform | Cổng mặc định |
+|---------|---------|---------------------|----------|---------------|
+| llama   | LLM     | ghcr.io/ggml-org/llama.cpp:server | linux/amd64 | 10000 |
+| asr     | ASR     | lsxw/whisper-asr-webservice:latest | linux/arm64/v8 | 9000 |
+| voicevox| TTS (JP)| voicevox/voicevox_engine:cpu-ubuntu24.04-latest | linux/arm64/v8 | 50021 |
 
-Các biến chính (ví dụ):
+Đừng đặt platform ở mức top-level compose. Chỉ set theo từng service như trên để tránh xung đột kiến trúc.
 
-- `LLAMA_THREADS`: số luồng CPU cho LLM (mặc định 4).
-- `LLAMA_CTX`: context window (mặc định 2048).
-- `LLAMA_IMAGE`: image llama.cpp server (multi-arch).
-- `VOICEVOX_IMAGE`: image VOICEVOX Engine (multi-arch/ARM64).
-
-Bạn có thể “pin” đúng phiên bản bằng cách thay tag bằng digest (image@sha256:...) sau khi `docker compose pull`.
-
-## 4) Docker Compose
-
-Compose tạo 2 service:
-
-### voicevox
-
-- **Kiến trúc**: linux/arm64/v8.
-- **Cổng mặc định**: 50021 (REST API: `/speakers`, `/audio_query`, `/synthesis`).
-- **Command**: Không cần override command.
-
-### llama
-
-- **Kiến trúc**: linux/arm64/v8.
-- **Cổng mở**: 10000 cho HTTP server (OpenAI-compatible).
-- **Mount**: Mount thư mục `./models` để đọc file GGUF.
-- **Command**: Chỉ truyền tham số cho llama-server (đừng lặp lại `/app/llama-server` trong command).
-- **Healthcheck**: Đã cấu hình sẵn để chờ engine/model sẵn sàng.
-
-## 5) Chuẩn bị model TinyLlama
-
-Chọn một file GGUF đã lượng tử (khuyên dùng Q4_K_M để cân bằng tốc độ/chất lượng) và đặt vào `./models/`, ví dụ:
-
-```bash
-models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
-```
-
-Tuỳ chọn: Có thể cấu hình llama dùng `--hf-repo`/`--hf-file` để tự tải model lần đầu (sẽ lâu hơn; healthcheck đã nới thời gian).
-
-## 6) Khởi động & kiểm tra
-
-### Docker Compose
-
+## 4) Khởi chạy
+### Kéo ảnh và khởi động stack
 ```bash
 docker compose pull
 docker compose up -d
+```
+
+### Kiểm tra trạng thái
+```bash
 docker compose ps
+docker compose logs -f llama
+docker compose logs -f asr
+docker compose logs -f voicevox
 ```
 
-### VOICEVOX – kiểm tra nhanh
+### Health-check nhanh
 
+**Llama:**
 ```bash
-# danh sách speakers
-curl -s http://localhost:50021/speakers | jq '.[].name'
-
-# synth 2 bước: audio_query → synthesis
-echo -n "おはようございます。" > text.txt
-curl -s -X POST "http://127.0.0.1:50021/audio_query?speaker=1" \
-     -H "Content-Type: application/json" \
-     --data "{\"text\":\"$(cat text.txt)\"}" > query.json
-
-curl -s -X POST "http://localhost:50021/synthesis?speaker=1" \
-     -H "Content-Type: application/json" \
-     -d @query.json -o voice.wav
-
-# mở file
-open voice.wav
+curl -fsS http://localhost:10000/health
 ```
 
-### LLM – kiểm tra nhanh (OpenAI-compatible)
-
+**ASR (trang tài liệu):**
 ```bash
-# Health
-curl -s http://localhost:10000/health
+curl -I http://localhost:9000/docs
+```
 
-# Models
-curl -s http://localhost:10000/v1/models | jq
+**VOICEVOX (danh sách speakers):**
+```bash
+curl -fsS http://localhost:50021/speakers
+```
 
-# Chat Completions
-curl -s http://localhost:10000/v1/chat/completions \
+## 5) Test từng thành phần
+### 5.1 TTS (VOICEVOX → WAV tiếng Nhật)
+```bash
+TEXT='こんにちは。テストです。'
+ENC=$(python3 - <<'PY'
+import urllib.parse,sys
+print(urllib.parse.quote(sys.argv[1]))
+PY
+"$TEXT")
+
+# audio_query → synthesis
+curl -fsS -X POST "http://localhost:50021/audio_query?text=$ENC&speaker=1" \
+  -H "Content-Type: application/json" -d '{}' > /tmp/q.json
+
+curl -fsS -X POST "http://localhost:50021/synthesis?speaker=1" \
+  -H "Content-Type: application/json" -d 'tmp/q.json' -o /tmp/ja.wav
+
+# Có thể nghe thử trên macOS:
+afplay /tmp/ja.wav
+```
+
+### 5.2 ASR (Whisper – nhận dạng tiếng Nhật)
+**Chuẩn hoá audio về 16kHz/mono PCM16 trước khi gửi:**
+```bash
+ffmpeg -y -i /tmp/ja.wav -ar 16000 -ac 1 -c:a pcm_s16le /tmp/ja16.wav
+```
+
+**Gửi lên ASR:**
+```bash
+curl -v http://localhost:9000/asr \
+  -F task=transcribe \
+  -F language=ja \
+  -F audio_file='tmp/ja16.wav'
+```
+
+Nếu kết quả không chính xác với tiếng Nhật, nâng `ASR_MODEL` lên `base` hoặc `small` trong compose, sau đó `docker compose up -d asr` để áp dụng.
+
+### 5.3 LLM (llama.cpp server)
+**Completion API (đơn giản):**
+```bash
+curl -fsS http://localhost:10000/completion \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"日本語で自己紹介をしてください。","n_predict":256}'
+```
+
+**(Tuỳ bản server) OpenAI-like chat:**
+```bash
+curl -fsS http://localhost:10000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model":"tinyllama",
-    "messages":[
-      {"role":"system","content":"You are a helpful assistant."},
-      {"role":"user","content":"簡単な日本語で自己紹介してください。"}
-    ],
-    "temperature":0.7
-  }' | jq
+    "messages":[{"role":"user","content":"日本語で自己紹介をしてください。"}],
+    "max_tokens":256
+  }'
 ```
 
-## 7) Benchmark
-
-Trong thư mục `scripts/` đã có sẵn:
-
-- `bench_llm.sh`: đo latency & tokens/s cho TinyLlama.
-- `bench_voicevox.sh`: đo thời gian synth & RTF (Real-Time Factor).
-- `bench_all.sh`: chạy cả hai.
-
-Chạy:
-
+## 6) (Tuỳ chọn) Test vòng kín ASR → LLM → TTS
 ```bash
-chmod +x scripts/bench_*.sh
-./scripts/bench_all.sh
+cat > /tmp/pipeline.sh <<'SH'
+set -euo pipefail
+
+# 1) ASR (giả sử đã có /tmp/ja16.wav)
+JSON=$(curl -fsS http://localhost:9000/asr \
+  -F task=transcribe -F language=ja -F audio_file='tmp/ja16.wav')
+echo "[ASR] $JSON"
+USER_TEXT="$JSON"   # server này thường trả plain text
+
+# 2) Gọi LLM
+LLM_JSON=$(curl -fsS http://localhost:10000/completion \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\":\"以下はユーザーの入力です。これに自然に日本語で返答してください：\\n$USER_TEXT\",\"n_predict\":256}")
+echo "[LLM] $LLM_JSON"
+
+REPLY_JA=$(python3 - <<'PY'
+import json,sys
+s=sys.stdin.read()
+try:
+  j=json.loads(s)
+  if "content" in j: print(j["content"])
+  elif "choices" in j and j["choices"]:
+    c=j["choices"][0]
+    print(c.get("text", c.get("content","")))
+  else:
+    print("")
+except:
+  print("")
+PY
+<<<"$LLM_JSON")
+
+echo "[REPLY_JA] $REPLY_JA"
+
+# 3) TTS bằng VOICEVOX
+ENC=$(python3 - <<'PY'
+import urllib.parse,sys
+print(urllib.parse.quote(sys.argv[1]))
+PY
+"$REPLY_JA")
+
+curl -fsS -X POST "http://localhost:50021/audio_query?text=$ENC&speaker=1" \
+  -H "Content-Type: application/json" -d '{}' > /tmp/q_llm.json
+
+curl -fsS -X POST "http://localhost:50021/synthesis?speaker=1" \
+  -H "Content-Type: application/json" -d 'tmp/q_llm.json' -o /tmp/reply.wav
+
+# Phát trên macOS
+afplay /tmp/reply.wav
+SH
+
+bash /tmp/pipeline.sh
 ```
 
-**Diễn giải nhanh:**
+## 7) Gợi ý cấu hình & mô phỏng Pi 5 (8 GB)
+Trong `docker-compose.yml`, có thể giới hạn tài nguyên để gần với Pi 5:
 
-- **LLM**: quan sát Latency & Tokens/sec (ước lượng).
-- **VOICEVOX**: RTF < 1.0 nghĩa là synth nhanh hơn thời gian thực.
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: "4.0"     # Pi 5 ~4 cores
+      memory: "6g"    # chừa headroom cho OS & cache
+```
 
-## 8) Lệnh tiện dụng
+Áp dụng cho từng service (nhất là llama và asr). Trên Docker Desktop, phần deploy có tác dụng ở chế độ Compose hiện đại (không phải Swarm); nếu không, cân nhắc dùng `cpus:` và `mem_limit:` ở phần `services.<name>`.
 
+**llama:**
+- **Model**: TinyLlama 1.1B Q4_K_M
+- **Tham số gợi ý**: `-t 4` (threads), `--parallel 2`, `-c 2048`.
+
+**asr (Whisper):**
+- `ASR_MODEL=tiny/base/small` (JP tốt hơn với small), `COMPUTE_TYPE=int8`.
+
+**voicevox:**
+- CPU dùng khoảng 0.8–1.5 GB khi tổng hợp; chọn speaker phù hợp (ví dụ 1).
+
+## 8) Dừng & dọn dẹp
 ```bash
-# Khởi động (pull + up)
-docker compose pull && docker compose up -d
+# Dừng nhưng giữ dữ liệu (cache, models)
+docker compose down
 
-# Log theo dịch vụ
-docker compose logs -f voicevox
-docker compose logs -f llama
-
-# Dừng & xoá stack (kèm volumes)
-docker compose down -v
-
-# Dọn rác Docker (cẩn trọng: xoá image/cache/volumes không dùng)
-docker system prune -af --volumes
-```
-
-**Ghi chú:** Mac M1 mạnh hơn Pi 5, vì vậy benchmark dùng để so sánh tương đối khi ước lượng hiệu năng trên Pi 5 thực tế. Nếu cần thêm UI chat (OpenWebUI) hoặc ASR (Whisper.cpp), bạn có thể mở rộng `docker-compose.yml` tương ứng.
+# Dọn toàn bộ container + ảnh (cẩn thận!)
+docker compose down --rmi all --volumes --remove-orphans
