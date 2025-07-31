@@ -1,2 +1,4 @@
 models/*
 !models/.gitkeep
+asr_models/*
+!asr_models/.gitkeep
