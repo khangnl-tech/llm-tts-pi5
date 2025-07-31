@@ -26,7 +26,6 @@ llm-tts/
    └─ bench_all.sh        # chạy cả 2 benchmark
 ```
 
-**Lưu ý:** README này không chèn nội dung các file nguồn. Xem nội dung thực tế trong repo của bạn.
 
 ## 3) Biến môi trường (.env)
 
