@@ -1,5 +1,2 @@
-.env
-models/
-*.wav
-*.json
-*.txt
+models/*
+!models/.gitkeep
