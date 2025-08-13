@@ -7,7 +7,7 @@ services:
     ports:
       - "50021:50021"
     # Giới hạn tài nguyên ~ Pi5 (8GB)
-    cpus: "1.0"               # ~1 core
+    cpus: "0.5"               # ~0.5 core
     cpuset: "0-3"             # ghim vào 4 vCPU đầu
     cpu_shares: 512
     mem_limit: "2g"
@@ -43,7 +43,7 @@ services:
     cpus: "2.5"               # ~2.5 core
     cpuset: "0-3"
     cpu_shares: 768
-    mem_limit: "4g"
+    mem_limit: "3g"
     memswap_limit: "4.5g"
     oom_kill_disable: false
     healthcheck:
@@ -70,7 +70,7 @@ services:
     volumes:
       - ./asr_models:/root/.cache/whisper
     # Giới hạn tài nguyên ~ Pi5 (8GB)
-    cpus: "1.0"               # ~1 core
+    cpus: "0.5"               # ~1 core
     cpuset: "0-3"
     cpu_shares: 256
     mem_limit: "1.5g"
